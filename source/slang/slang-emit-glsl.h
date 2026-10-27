@@ -78,6 +78,7 @@ protected:
     virtual bool tryEmitInstStmtImpl(IRInst* inst) SLANG_OVERRIDE;
 
     virtual void emitGlobalInstImpl(IRInst* inst) override;
+    virtual bool tryGenerateNameImpl(IRInst* inst, String& outName) override;
     void emitBufferPointerTypeDefinition(IRInst* ptrType);
 
     virtual void emitSimpleValueImpl(IRInst* inst) SLANG_OVERRIDE;

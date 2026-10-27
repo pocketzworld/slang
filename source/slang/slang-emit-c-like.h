@@ -341,6 +341,8 @@ public:
 
     String generateName(IRInst* inst);
     virtual String generateEntryPointNameImpl(IREntryPointDecoration* entryPointDecor);
+    /// Name an instruction the target's own way, returning false for the usual name.
+    virtual bool tryGenerateNameImpl(IRInst* /*inst*/, String& /*outName*/) { return false; }
 
     String getName(IRInst* inst);
     String getUnmangledName(IRInst* inst);

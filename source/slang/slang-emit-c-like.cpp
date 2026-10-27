@@ -1216,6 +1216,13 @@ String CLikeSourceEmitter::generateName(IRInst* inst)
         return String(nvapiDecor->getName());
     }
 
+    // A target may name some instructions itself (e.g. GLSL ES varyings, matched by name).
+    {
+        String targetName;
+        if (tryGenerateNameImpl(inst, targetName))
+            return targetName;
+    }
+
     auto entryPointDecor = inst->findDecoration<IREntryPointDecoration>();
     if (entryPointDecor)
     {

@@ -901,6 +901,31 @@ bool GLSLSourceEmitter::_emitGLSLLayoutQualifierWithBindingKinds(
         space = getBindingSpace(chain, kind);
     }
 
+    // GLSL ES 3.00 has no `binding` (textures and blocks are bound by name at run time)
+    // and `location` only on vertex inputs and fragment outputs.
+    if (_isGLSLES())
+    {
+        switch (kind)
+        {
+        case LayoutResourceKind::VaryingInput:
+            if (m_entryPointStage != Stage::Vertex)
+                return true;
+            break;
+        case LayoutResourceKind::VaryingOutput:
+            if (m_entryPointStage != Stage::Fragment)
+                return true;
+            break;
+        case LayoutResourceKind::ConstantBuffer:
+        case LayoutResourceKind::ShaderResource:
+        case LayoutResourceKind::UnorderedAccess:
+        case LayoutResourceKind::SamplerState:
+        case LayoutResourceKind::DescriptorTableSlot:
+            return true;
+        default:
+            break;
+        }
+    }
+
     switch (kind)
     {
     case LayoutResourceKind::Uniform:
@@ -1025,10 +1050,19 @@ void GLSLSourceEmitter::_emitGLSLSubpassInputType(IRSubpassInputType* type)
     }
 }
 
+static bool _isHalfBasedType(IRType* type);
+
 void GLSLSourceEmitter::_emitGLSLTextureOrTextureSamplerType(
     IRTextureTypeBase* type,
     char const* baseName)
 {
+    // GLSL ES has no separate textures: a texture is a sampler, highp unless its texels are
+    // relaxed `half`.
+    if (_isGLSLES() && UnownedStringSlice(baseName) == "texture")
+    {
+        m_writer->emit(_isHalfBasedType(type->getElementType()) ? "mediump " : "highp ");
+        baseName = "sampler";
+    }
     if (type->getElementType()->getOp() == kIROp_HalfType)
     {
         // Texture access is always as float types if half is specified
@@ -2248,9 +2282,48 @@ void GLSLSourceEmitter::emitGlobalInstImpl(IRInst* inst)
             break;
         [[fallthrough]];
     default:
+        // GLSL ES has no separate samplers: a texture carries its sampling state, and each
+        // `t.Sample(s, ...)` samples `t` alone (see the `$p` expansion).
+        if (_isGLSLES() && as<IRGlobalParam>(inst) &&
+            as<IRSamplerStateTypeBase>(unwrapArray(inst->getDataType())))
+            break;
         Super::emitGlobalInstImpl(inst);
         break;
     }
+}
+
+bool GLSLSourceEmitter::tryGenerateNameImpl(IRInst* inst, String& outName)
+{
+    // GLSL ES 3.00 has no `location` on varyings between stages, so a vertex output and
+    // the fragment input it feeds are matched by name: both are named for their semantic.
+    if (!_isGLSLES() || !as<IRGlobalParam>(inst))
+        return false;
+    auto layoutDecor = inst->findDecoration<IRLayoutDecoration>();
+    auto varLayout = layoutDecor ? as<IRVarLayout>(layoutDecor->getLayout()) : nullptr;
+    if (!varLayout)
+        return false;
+    LayoutResourceKind kind = LayoutResourceKind::None;
+    if (m_entryPointStage == Stage::Vertex)
+        kind = LayoutResourceKind::VaryingOutput;
+    else if (m_entryPointStage == Stage::Fragment)
+        kind = LayoutResourceKind::VaryingInput;
+    auto offset = kind == LayoutResourceKind::None ? nullptr : varLayout->findOffsetAttr(kind);
+    if (!offset)
+        return false;
+    // Built-in variables (`gl_Position`) keep their names.
+    if (varLayout->findSystemValueSemanticAttr())
+        return false;
+    StringBuilder sb;
+    sb << "vs_";
+    if (auto semantic = varLayout->findAttr<IRUserSemanticAttr>())
+    {
+        appendScrubbedName(semantic->getName(), sb);
+        sb << semantic->getIndex();
+    }
+    else
+        sb << "LOCATION" << offset->getOffset();
+    outName = sb.produceString();
+    return true;
 }
 
 bool GLSLSourceEmitter::tryEmitInstExprImpl(IRInst* inst, const EmitOpInfo& inOuterPrec)
@@ -3413,6 +3486,35 @@ static Index _getGLSLVersion(ProfileVersion profile)
 
 void GLSLSourceEmitter::emitFrontMatterImpl(TargetRequest* targetReq)
 {
+    if (_isGLSLES())
+    {
+        // GLSL ES 3.00. A fragment shader has no default float precision; every value is
+        // highp unless declared `mediump` (a relaxed `half`), and the sampler types without
+        // a default are given one.
+        m_writer->emit("#version 300 es\n");
+        if (m_glslExtensionTracker)
+        {
+            StringBuilder builder;
+            m_glslExtensionTracker->appendExtensionRequireLinesForGLSL(builder);
+            m_writer->emit(builder.getUnownedSlice());
+        }
+        m_writer->emit("precision highp float;\nprecision highp int;\n");
+        m_writer->emit("precision highp sampler3D;\nprecision highp samplerCubeShadow;\n");
+        m_writer->emit("precision highp sampler2DShadow;\nprecision highp sampler2DArray;\n");
+        m_writer->emit("precision highp sampler2DArrayShadow;\n");
+        switch (getTargetProgram()->getOptionSet().getMatrixLayoutMode())
+        {
+        case kMatrixLayoutMode_RowMajor:
+        default:
+            m_writer->emit("layout(column_major) uniform;\n");
+            break;
+        case kMatrixLayoutMode_ColumnMajor:
+            m_writer->emit("layout(row_major) uniform;\n");
+            break;
+        }
+        return;
+    }
+
     auto effectiveProfile = m_effectiveProfile;
     if (effectiveProfile.getFamily() == ProfileFamily::GLSL)
     {

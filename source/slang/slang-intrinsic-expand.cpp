@@ -526,6 +526,15 @@ const char* IntrinsicExpandContext::_emitSpecial(const char* cursor)
                     SLANG_RELEASE_ASSERT(m_argCount >= 2);
                     auto samplerArg = m_args[1].get();
 
+                    // GLSL ES has no separate samplers: the texture is declared as a sampler
+                    // and carries its own sampling state, so it is sampled alone.
+                    if (m_emitter->getTargetProgram()->getOptionSet().getBoolOption(
+                            CompilerOptionName::GLSLES))
+                    {
+                        m_emitter->emitOperand(textureArg, getInfo(EmitOp::General));
+                        break;
+                    }
+
                     // We will emit GLSL code to construct the corresponding combined
                     // texture/sampler type from the separate pieces.
                     //
