@@ -465,11 +465,17 @@ public:
 
     /// `-relaxed-half` on a target whose own reduced-precision type does not take 4 bytes in a
     /// constant buffer (Metal's `half`; FXC lays out `min16float` apart from floats): a half
-    /// field of a constant buffer is stored as a float and read as half.
+    /// field of a constant buffer (or of a struct nested in one) is stored as a float, read as
+    /// half and written from half.
     virtual bool usesRelaxedHalfFloatStorage() { return false; }
     bool isRelaxedHalfStorageField(IRStructType* structType, IRStructField* field);
     bool isRelaxedHalfStorageStruct(IRInst* type);
     bool isRelaxedHalfStorageRead(IRInst* inst);
+    /// The half-based field stored as float that a field address or extraction refers to.
+    IRStructField* findRelaxedHalfStorageField(IRInst* access);
+    /// Whether a store through `ptr` writes a relaxed half into float storage.
+    bool isRelaxedHalfStorageWrite(IRInst* ptr);
+    void splitRelaxedHalfArrayReads(IRModule* module);
     IRType* getRelaxedHalfStorageType(IRType* type);
     bool m_relaxedHalfStorageStructsFound = false;
     HashSet<IRInst*> m_relaxedHalfStorageStructs;
