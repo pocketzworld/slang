@@ -1056,12 +1056,14 @@ void GLSLSourceEmitter::_emitGLSLTextureOrTextureSamplerType(
     IRTextureTypeBase* type,
     char const* baseName)
 {
-    // GLSL ES has no separate textures: a texture is a sampler, highp unless its texels are
+    // GLSL ES has no separate textures: a texture is a sampler. Every sampler gets a precision
+    // (the default for sampler2D is lowp): highp, or mediump when its texels are
     // relaxed `half`.
-    if (_isGLSLES() && UnownedStringSlice(baseName) == "texture")
+    if (_isGLSLES())
     {
         m_writer->emit(_isHalfBasedType(type->getElementType()) ? "mediump " : "highp ");
-        baseName = "sampler";
+        if (UnownedStringSlice(baseName) == "texture")
+            baseName = "sampler";
     }
     if (type->getElementType()->getOp() == kIROp_HalfType)
     {

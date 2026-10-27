@@ -3749,10 +3749,21 @@ void CLikeSourceEmitter::emitRegion(Region* inRegion, Region* breakRegionToOmit)
 
                 emitIfDecorationsImpl(ifRegion->ifElseInst);
 
-                // TODO: consider simplifying the code in
-                // the case where `ifRegion == null`
-                // so that we output `if(!condition) { elseRegion }`
-                // instead of the current `if(condition) {} else { elseRegion }`
+                // An empty `then` (a loop's exit test, typically) is written
+                // `if(!(condition)) { elseRegion }` rather than
+                // `if(condition) {} else { elseRegion }`.
+                if (!ifRegion->thenRegion && ifRegion->elseRegion)
+                {
+                    m_writer->emit("if(!(");
+                    emitOperand(ifRegion->getCondition(), getInfo(EmitOp::General));
+                    m_writer->emit("))\n{\n");
+                    m_writer->indent();
+                    emitRegion(ifRegion->elseRegion);
+                    m_writer->dedent();
+                    m_writer->emit("}\n");
+                    region = ifRegion->nextRegion;
+                    continue;
+                }
 
                 m_writer->emit("if(");
                 emitOperand(ifRegion->getCondition(), getInfo(EmitOp::General));
