@@ -90,6 +90,8 @@ void GLSLSourceEmitter::_beforeComputeEmitProcessInstruction(
 void GLSLSourceEmitter::beforeComputeEmitActions(IRModule* module)
 {
     buildEntryPointReferenceGraph(this->m_referencingEntryPoints, module);
+    if (_isGLSLES())
+        _findGLSLESCombinedSamplers(module);
 
     IRBuilder builder(module);
     for (auto globalInst : module->getGlobalInsts())
@@ -605,9 +607,15 @@ void GLSLSourceEmitter::_emitGLSLParameterGroup(
     }
 
     // Generate a name for the block.
-    m_writer->emit(_generateUniqueName(
-        (StringBuilder() << "block_" << getUnmangledName(type->getElementType()).getUnownedSlice())
-            .getUnownedSlice()));
+    // GLSL ES binds a uniform block by its name: the block takes the constant buffer's own
+    // name (the instance is named apart, see tryGenerateNameImpl).
+    String esBlockName = _isGLSLES() ? _getGLSLESBlockName(varDecl) : String();
+    if (esBlockName.getLength())
+        m_writer->emit(esBlockName);
+    else
+        m_writer->emit(_generateUniqueName(
+            (StringBuilder() << "block_" << getUnmangledName(type->getElementType()).getUnownedSlice())
+                .getUnownedSlice()));
 
     auto elementType = type->getElementType();
     auto structType = as<IRStructType>(elementType);
@@ -2284,22 +2292,161 @@ void GLSLSourceEmitter::emitGlobalInstImpl(IRInst* inst)
             break;
         [[fallthrough]];
     default:
-        // GLSL ES has no separate samplers: a texture carries its sampling state, and each
-        // `t.Sample(s, ...)` samples `t` alone (see the `$p` expansion).
+        // GLSL ES has no separate samplers: each sampled texture/sampler pair is declared as a
+        // combined sampler (see _findGLSLESCombinedSamplers).
         if (_isGLSLES() && as<IRGlobalParam>(inst) &&
             as<IRSamplerStateTypeBase>(unwrapArray(inst->getDataType())))
+            break;
+        if (_isGLSLES() && _tryEmitGLSLESCombinedSamplers(inst))
             break;
         Super::emitGlobalInstImpl(inst);
         break;
     }
 }
 
+// GLSL ES: a uniform block's name, the name its constant buffer was declared with.
+String GLSLSourceEmitter::_getGLSLESBlockName(IRInst* varDecl)
+{
+    auto nameHint = varDecl->findDecoration<IRNameHintDecoration>();
+    if (!nameHint)
+        return String();
+    StringBuilder sb;
+    appendScrubbedName(nameHint->getName(), sb);
+    return sb.produceString();
+}
+
+// GLSL ES: the texture/sampler pairs that are sampled (see m_glslesCombinedSamplers).
+void GLSLSourceEmitter::_findGLSLESCombinedSamplers(IRModule* module)
+{
+    auto isSeparateTexture = [](IRInst* inst)
+    {
+        auto textureType = as<IRTextureType>(inst->getDataType());
+        return as<IRGlobalParam>(inst) && textureType && !textureType->isCombined();
+    };
+    auto isSampler = [](IRInst* inst)
+    { return as<IRGlobalParam>(inst) && as<IRSamplerStateTypeBase>(inst->getDataType()); };
+
+    Dictionary<IRInst*, List<IRInst*>> samplersOfTexture;
+    List<IRInst*> textures;
+    for (auto globalInst : module->getGlobalInsts())
+    {
+        if (!isSeparateTexture(globalInst))
+            continue;
+        List<IRInst*> samplers;
+        bool usedAlone = false;
+        for (auto use = globalInst->firstUse; use; use = use->nextUse)
+        {
+            auto user = use->getUser();
+            if (!as<IRBlock>(user->getParent()))
+                continue;
+            // A sampling call takes the texture, then the sampler.
+            auto call = as<IRCall>(user);
+            if (call && call->getArgCount() >= 2 && call->getArg(0) == globalInst &&
+                use == call->getArgs() && isSampler(call->getArg(1)))
+            {
+                if (!samplers.contains(call->getArg(1)))
+                    samplers.add(call->getArg(1));
+            }
+            else
+                usedAlone = true;
+        }
+        if (usedAlone)
+            m_glslesTexturesUsedAlone.add(globalInst);
+        if (samplers.getCount())
+        {
+            samplersOfTexture[globalInst] = samplers;
+            textures.add(globalInst);
+        }
+    }
+
+    for (auto texture : textures)
+    {
+        auto& samplers = samplersOfTexture[texture];
+        bool isShadow = false;
+        for (auto sampler : samplers)
+            if (as<IRSamplerComparisonStateType>(sampler->getDataType()))
+                isShadow = true;
+        // One sampler: the texture's own name, unless the texture is also read without one
+        // and the combined sampler is a shadow sampler (a different type).
+        bool ownName =
+            samplers.getCount() == 1 && !(isShadow && m_glslesTexturesUsedAlone.contains(texture));
+        List<GLSLESCombinedSampler> combined;
+        for (auto sampler : samplers)
+        {
+            GLSLESCombinedSampler entry;
+            entry.sampler = sampler;
+            entry.name =
+                ownName ? getName(texture) : (getName(texture) + "_" + getName(sampler));
+            combined.add(entry);
+        }
+        if (ownName)
+            m_glslesTexturesUsedAlone.remove(texture);
+        m_glslesCombinedSamplers[texture] = combined;
+    }
+}
+
+void GLSLSourceEmitter::emitCombinedTextureSamplerImpl(IRInst* texture, IRInst* sampler)
+{
+    if (auto combined = m_glslesCombinedSamplers.tryGetValue(texture))
+    {
+        for (auto& entry : *combined)
+        {
+            if (entry.sampler == sampler)
+            {
+                m_writer->emit(entry.name);
+                return;
+            }
+        }
+    }
+    Super::emitCombinedTextureSamplerImpl(texture, sampler);
+}
+
+bool GLSLSourceEmitter::_tryEmitGLSLESCombinedSamplers(IRInst* inst)
+{
+    auto combined = m_glslesCombinedSamplers.tryGetValue(inst);
+    if (!combined)
+        return false;
+    auto textureType = as<IRTextureType>(inst->getDataType());
+    for (auto& entry : *combined)
+    {
+        m_writer->emit("uniform ");
+        emitTextureOrTextureSamplerType(textureType, "sampler");
+        if (as<IRSamplerComparisonStateType>(entry.sampler->getDataType()))
+            m_writer->emit("Shadow");
+        m_writer->emit(" ");
+        m_writer->emit(entry.name);
+        m_writer->emit(";\n");
+    }
+    // The texture read without a sampler is declared under its own name too.
+    if (m_glslesTexturesUsedAlone.contains(inst))
+    {
+        m_writer->emit("uniform ");
+        emitTextureOrTextureSamplerType(textureType, "sampler");
+        m_writer->emit(" ");
+        m_writer->emit(getName(inst));
+        m_writer->emit(";\n");
+    }
+    return true;
+}
+
 bool GLSLSourceEmitter::tryGenerateNameImpl(IRInst* inst, String& outName)
 {
-    // GLSL ES 3.00 has no `location` on varyings between stages, so a vertex output and
-    // the fragment input it feeds are matched by name: both are named for their semantic.
     if (!_isGLSLES() || !as<IRGlobalParam>(inst))
         return false;
+
+    // A uniform block takes its constant buffer's name, and so its instance is named apart
+    // (a block name may not be used for anything else).
+    if (as<IRUniformParameterGroupType>(inst->getDataType()))
+    {
+        auto blockName = _getGLSLESBlockName(inst);
+        if (!blockName.getLength())
+            return false;
+        outName = blockName + "_cb";
+        return true;
+    }
+
+    // GLSL ES 3.00 has no `location` on varyings between stages, so a vertex output and
+    // the fragment input it feeds are matched by name: both are named for their semantic.
     auto layoutDecor = inst->findDecoration<IRLayoutDecoration>();
     auto varLayout = layoutDecor ? as<IRVarLayout>(layoutDecor->getLayout()) : nullptr;
     if (!varLayout)
@@ -3498,7 +3645,18 @@ void GLSLSourceEmitter::emitFrontMatterImpl(TargetRequest* targetReq)
         {
             StringBuilder builder;
             m_glslExtensionTracker->appendExtensionRequireLinesForGLSL(builder);
-            m_writer->emit(builder.getUnownedSlice());
+            // A texture is a sampler here, so texelFetch and textureSize need no extension.
+            List<UnownedStringSlice> lines;
+            StringUtil::calcLines(builder.getUnownedSlice(), lines);
+            for (auto line : lines)
+            {
+                if (line.getLength() &&
+                    line.indexOf(toSlice("GL_EXT_samplerless_texture_functions")) < 0)
+                {
+                    m_writer->emit(line);
+                    m_writer->emit("\n");
+                }
+            }
         }
         m_writer->emit("precision highp float;\nprecision highp int;\n");
         m_writer->emit("precision highp sampler3D;\nprecision highp samplerCubeShadow;\n");

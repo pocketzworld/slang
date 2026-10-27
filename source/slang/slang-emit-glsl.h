@@ -79,7 +79,24 @@ protected:
 
     virtual void emitGlobalInstImpl(IRInst* inst) override;
     virtual bool tryGenerateNameImpl(IRInst* inst, String& outName) override;
+    virtual void emitCombinedTextureSamplerImpl(IRInst* texture, IRInst* sampler) override;
     void emitBufferPointerTypeDefinition(IRInst* ptrType);
+
+    /// GLSL ES has no separate samplers: each texture/sampler pair that is sampled is declared
+    /// as a combined sampler (a shadow sampler for a comparison sampler). A texture sampled
+    /// with one sampler keeps the texture's name; one sampled with several gets one combined
+    /// sampler per pair, named `<texture>_<sampler>`, and its own name when it is also used
+    /// without a sampler (`Load`, `GetDimensions`).
+    struct GLSLESCombinedSampler
+    {
+        IRInst* sampler;
+        String name;
+    };
+    Dictionary<IRInst*, List<GLSLESCombinedSampler>> m_glslesCombinedSamplers;
+    HashSet<IRInst*> m_glslesTexturesUsedAlone;
+    void _findGLSLESCombinedSamplers(IRModule* module);
+    String _getGLSLESBlockName(IRInst* varDecl);
+    bool _tryEmitGLSLESCombinedSamplers(IRInst* inst);
 
     virtual void emitSimpleValueImpl(IRInst* inst) SLANG_OVERRIDE;
     virtual void emitLoopControlDecorationImpl(IRLoopControlDecoration* decl) SLANG_OVERRIDE;

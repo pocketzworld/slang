@@ -343,6 +343,12 @@ public:
     virtual String generateEntryPointNameImpl(IREntryPointDecoration* entryPointDecor);
     /// Name an instruction the target's own way, returning false for the usual name.
     virtual bool tryGenerateNameImpl(IRInst* /*inst*/, String& /*outName*/) { return false; }
+    /// Emit the combined sampler a target without separate samplers (GLSL ES) declares for
+    /// sampling `texture` with `sampler`; by default the texture itself.
+    virtual void emitCombinedTextureSamplerImpl(IRInst* texture, IRInst* /*sampler*/)
+    {
+        emitOperand(texture, getInfo(EmitOp::General));
+    }
 
     String getName(IRInst* inst);
     String getUnmangledName(IRInst* inst);
