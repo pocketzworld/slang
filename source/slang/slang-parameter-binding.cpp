@@ -876,6 +876,17 @@ static bool shouldDisableDiagnostic(Decl* decl, DiagnosticInfo const& diagnostic
     return false;
 }
 
+// A target that writes no Vulkan bindings, so has no use for warnings about them: Metal (which
+// binds by its own buffer, texture and sampler indices) and GLSL ES (`-glsl-es`, bound by name).
+static bool _ignoresVulkanBindings(ParameterBindingContext* context)
+{
+    auto targetReq = context->getTargetRequest();
+    if (isMetalTarget(targetReq))
+        return true;
+    return targetReq->getTarget() == CodeGenTarget::GLSL &&
+           context->getTargetProgram()->getOptionSet().getBoolOption(CompilerOptionName::GLSLES);
+}
+
 static void addExplicitParameterBinding(
     ParameterBindingContext* context,
     RefPtr<ParameterInfo> parameterInfo,
@@ -978,7 +989,12 @@ static void addExplicitParameterBinding(
             // the user because such overlapping bindings are likely
             // to indicate a programming error.
             //
-            if (shouldDisableDiagnostic(paramA, *diagnosticInfo) &&
+            // Registers of different classes meet in one Vulkan binding range on a target
+            // that then writes no Vulkan bindings: nothing overlaps there.
+            if (kind == LayoutResourceKind::DescriptorTableSlot && _ignoresVulkanBindings(context))
+            {
+            }
+            else if (shouldDisableDiagnostic(paramA, *diagnosticInfo) &&
                 shouldDisableDiagnostic(paramB, *diagnosticInfo))
             {
             }
@@ -1116,9 +1132,10 @@ static bool _maybeDiagnoseMissingVulkanLayoutModifier(
             if (textureType->isCombined())
             {
                 // Recommend [[vk::binding]] but not '-fvk-xxx-shift` for combined texture samplers
-                getSink(context)->diagnose(Diagnostics::RegisterModifierButNoVulkanLayout{
-                    .paramName = varDecl.getName(),
-                    .location = registerModifier->loc});
+                if (!_ignoresVulkanBindings(context))
+                    getSink(context)->diagnose(Diagnostics::RegisterModifierButNoVulkanLayout{
+                        .paramName = varDecl.getName(),
+                        .location = registerModifier->loc});
                 return true;
             }
         }
@@ -1130,10 +1147,11 @@ static bool _maybeDiagnoseMissingVulkanLayoutModifier(
             registerClassName,
             registerIndexDigits);
 
-        getSink(context)->diagnose(Diagnostics::RegisterModifierButNoVkBindingNorShift{
-            .paramName = varDecl.getName(),
-            .className = registerClassName,
-            .location = registerModifier->loc});
+        if (!_ignoresVulkanBindings(context))
+            getSink(context)->diagnose(Diagnostics::RegisterModifierButNoVkBindingNorShift{
+                .paramName = varDecl.getName(),
+                .className = registerClassName,
+                .location = registerModifier->loc});
         return true;
     }
     return false;
