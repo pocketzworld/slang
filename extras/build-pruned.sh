@@ -29,7 +29,7 @@ case "$(uname -s)" in
 esac
 
 start=$(date +%s)
-cmake -S . -B "$build" "${generator[@]}" -DCMAKE_BUILD_TYPE=Release \
+cmake -S . -B "$build" ${generator[@]+"${generator[@]}"} -DCMAKE_BUILD_TYPE=Release \
     -DSLANG_ENABLE_GFX=OFF -DSLANG_ENABLE_SLANGD=OFF -DSLANG_ENABLE_SLANGI=OFF \
     -DSLANG_ENABLE_SLANGRT=OFF -DSLANG_ENABLE_SLANG_GLSLANG=OFF -DSLANG_ENABLE_SLANG_PROXY=OFF \
     -DSLANG_ENABLE_TESTS=OFF -DSLANG_ENABLE_EXAMPLES=OFF -DSLANG_ENABLE_REPLAYER=OFF \
