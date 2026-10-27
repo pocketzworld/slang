@@ -1636,6 +1636,16 @@ void HLSLSourceEmitter::emitVectorTypeNameImpl(IRType* elementType, IRIntegerVal
             m_writer->emit(elementCount);
             return;
 
+        case kIROp_HalfType:
+            // A relaxed `half` is `min16float`, whose vectors are `min16floatN`.
+            if (getTargetProgram()->getOptionSet().getBoolOption(CompilerOptionName::RelaxedHalf))
+            {
+                m_writer->emit("min16float");
+                m_writer->emit(elementCount);
+                return;
+            }
+            break;
+
         default:
             break;
         }
@@ -1847,6 +1857,12 @@ void HLSLSourceEmitter::emitSimpleTypeImpl(IRType* type)
     case kIROp_UInt16Type:
     case kIROp_HalfType:
         {
+            if (type->getOp() == kIROp_HalfType &&
+                getTargetProgram()->getOptionSet().getBoolOption(CompilerOptionName::RelaxedHalf))
+            {
+                m_writer->emit("min16float");
+                return;
+            }
             m_writer->emit(getDefaultBuiltinTypeName(type->getOp()));
             return;
         }

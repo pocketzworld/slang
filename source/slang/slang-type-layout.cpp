@@ -248,6 +248,10 @@ struct DefaultLayoutRulesImpl : SimpleLayoutRulesImpl
             return GetPointerLayout(context);
 
         case BaseType::Half:
+            // A relaxed `half` is stored as a 32-bit float (Unity's layout).
+            if (context.targetReq &&
+                context.targetReq->getOptionSet().getBoolOption(CompilerOptionName::RelaxedHalf))
+                return SimpleLayoutInfo(LayoutResourceKind::Uniform, 4, 4);
             return SimpleLayoutInfo(LayoutResourceKind::Uniform, 2, 2);
         case BaseType::Float:
             return SimpleLayoutInfo(LayoutResourceKind::Uniform, 4, 4);

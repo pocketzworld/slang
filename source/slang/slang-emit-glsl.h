@@ -135,6 +135,11 @@ protected:
 
     void _requireBaseType(BaseType baseType);
 
+    /// `-relaxed-half`: `half` is `float` with a `mediump` qualifier on declarations.
+    bool _isRelaxedHalf();
+    /// `-glsl-es`: the output is GLSL ES 3.00.
+    bool _isGLSLES();
+
     void _maybeEmitGLSLCast(IRType* castType, IRInst* inst);
 
     /// Emit the legalized form of a bitwise or logical operation on a vector of `bool`.

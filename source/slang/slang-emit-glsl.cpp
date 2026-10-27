@@ -1162,7 +1162,7 @@ void GLSLSourceEmitter::_emitGLSLTypePrefix(IRType* type, bool promoteHalfToFloa
     case kIROp_HalfType:
         {
             _requireBaseType(BaseType::Half);
-            if (promoteHalfToFloat)
+            if (promoteHalfToFloat || _isRelaxedHalf())
             {
                 // no prefix
             }
@@ -1284,7 +1284,37 @@ void GLSLSourceEmitter::_maybeEmitGLSLBuiltin(IRGlobalParam* var, UnownedStringS
 
 void GLSLSourceEmitter::_requireBaseType(BaseType baseType)
 {
+    // A relaxed `half` is a `float`: it needs no 16-bit extension.
+    if (baseType == BaseType::Half && _isRelaxedHalf())
+        return;
     m_glslExtensionTracker->requireBaseTypeExtension(baseType);
+}
+
+bool GLSLSourceEmitter::_isRelaxedHalf()
+{
+    return getTargetProgram()->getOptionSet().getBoolOption(CompilerOptionName::RelaxedHalf);
+}
+
+bool GLSLSourceEmitter::_isGLSLES()
+{
+    return getTargetProgram()->getOptionSet().getBoolOption(CompilerOptionName::GLSLES);
+}
+
+// Whether a declaration of this type takes `mediump` under `-relaxed-half`.
+static bool _isHalfBasedType(IRType* type)
+{
+    for (;;)
+    {
+        if (auto arrayType = as<IRArrayTypeBase>(type))
+            type = arrayType->getElementType();
+        else if (auto vectorType = as<IRVectorType>(type))
+            type = vectorType->getElementType();
+        else if (auto matrixType = as<IRMatrixType>(type))
+            type = matrixType->getElementType();
+        else
+            break;
+    }
+    return type && type->getOp() == kIROp_HalfType;
 }
 
 void GLSLSourceEmitter::_maybeEmitGLSLFlatModifier(IRType* valueType)
@@ -1450,7 +1480,8 @@ void GLSLSourceEmitter::emitSimpleValueImpl(IRInst* inst)
                         // GL_EXT_shader_explicit_arithmetic_types, so register the requirement
                         // here just as the integer-literal cases above do for their suffixes.
                         _requireBaseType(BaseType::Half);
-                        m_writer->emit("HF");
+                        if (!_isRelaxedHalf())
+                            m_writer->emit("HF");
                         break;
                     case kIROp_DoubleType:
                         // No `_requireBaseType` here: double is gated by GLSL `#version`, not by an
@@ -3469,6 +3500,10 @@ void GLSLSourceEmitter::emitTypeImpl(IRType* type, const StringSliceLoc* nameAnd
         m_writer->emit("spirv_by_reference ");
         type = refType->getValueType();
     }
+    // A declaration of a relaxed `half` is a `mediump` float; a cast or
+    // constructor (no name) is a plain float type.
+    if (nameAndLoc && _isRelaxedHalf() && _isHalfBasedType(type))
+        m_writer->emit("mediump ");
     return Super::emitTypeImpl(type, nameAndLoc);
 }
 
@@ -3630,7 +3665,7 @@ void GLSLSourceEmitter::emitSimpleTypeImpl(IRType* type)
     case kIROp_HalfType:
         {
             _requireBaseType(BaseType::Half);
-            m_writer->emit("float16_t");
+            m_writer->emit(_isRelaxedHalf() ? "float" : "float16_t");
             return;
         }
     case kIROp_StructType:

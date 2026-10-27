@@ -112,7 +112,16 @@ Result IRTypeLayoutRules::calcSizeAndAlignment(
 
         BASE(Int16, 2);
         BASE(UInt16, 2);
-        BASE(Half, 2);
+    case kIROp_HalfType:
+        {
+            // A relaxed `half` is stored as a 32-bit float (Unity's layout).
+            int size =
+                targetReq && targetReq->getOptionSet().getBoolOption(CompilerOptionName::RelaxedHalf)
+                    ? 4
+                    : 2;
+            *outSizeAndAlignment = IRSizeAndAlignment(size, size);
+            return SLANG_OK;
+        }
         BASE(BFloat16, 2);
 
         BASE(Int, 4);

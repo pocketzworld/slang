@@ -1363,6 +1363,15 @@ typedef uint32_t SlangSizeT;
         // such as using uniform parameters as mutable temporaries. Has no effect on other dialects.
         EnableExtendedHLSLBackwardsCompatibility = 163,
 
+        // `bool`: `half` is a precision hint rather than a 16-bit type, as in Unity: it is
+        // `mediump float` on GLSL, `min16float` on HLSL and `half` on Metal, and it takes
+        // 4 bytes in constant buffers.
+        RelaxedHalf = 164,
+
+        // `bool`: GLSL output is GLSL ES 3.00 (OpenGL ES 3.0 / WebGL 2): precision
+        // qualifiers, combined samplers, no binding layouts, varyings matched by name.
+        GLSLES = 165,
+
         // Do not assign an explicit value to CountOf. It must remain one past the last option,
         // which it derives implicitly from the preceding (highest-valued) enumerator.
         CountOf,

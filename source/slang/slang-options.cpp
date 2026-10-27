@@ -1265,6 +1265,15 @@ void initCommandOptions(CommandOptions& options)
          "-enable-experimental-passes",
          nullptr,
          "Enable experimental compiler passes"},
+        {OptionKind::RelaxedHalf,
+         "-relaxed-half",
+         nullptr,
+         "Treat `half` as a precision hint, as Unity does: `mediump float` on GLSL, "
+         "`min16float` on HLSL, `half` on Metal, and 4 bytes in constant buffers."},
+        {OptionKind::GLSLES,
+         "-glsl-es",
+         nullptr,
+         "Write GLSL ES 3.00 rather than desktop/Vulkan GLSL when the target is GLSL."},
         {OptionKind::EnableExtendedHLSLBackwardsCompatibility,
          "-Gec",
          nullptr,
@@ -2929,6 +2938,8 @@ SlangResult OptionsParser::_parse(int argc, char const* const* argv)
         case OptionKind::ValidateUniformity:
         case OptionKind::EnableExperimentalPasses:
         case OptionKind::EnableExtendedHLSLBackwardsCompatibility:
+        case OptionKind::RelaxedHalf:
+        case OptionKind::GLSLES:
         case OptionKind::EnableExperimentalDynamicDispatch:
         case OptionKind::EmitIr:
         case OptionKind::DumpIntermediates:
