@@ -39,7 +39,8 @@ cmake -S . -B "$build" ${generator[@]+"${generator[@]}"} -DCMAKE_BUILD_TYPE=Rele
     -DSLANG_STANDARD_MODULE_DEVELOP_BUILD=OFF -DSLANG_ENABLE_RELEASE_DEBUG_INFO=OFF \
     -DSLANG_EMBED_CORE_MODULE=ON -DSLANG_EMBED_CORE_MODULE_SOURCE=OFF -DSLANG_ENABLE_MIMALLOC=OFF \
     -DSLANG_ENABLE_RELEASE_LTO="${SLANG_PRUNED_LTO:-OFF}"
-cmake --build "$build" --config Release --target slangc --parallel
+jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 8)
+cmake --build "$build" --config Release --target slangc --parallel "$jobs"
 
 lib=$( (ls "$build"/Release/bin/slang-compiler.dll "$build"/Release/lib/libslang-compiler.dylib \
       "$build"/Release/lib/libslang-compiler.so 2>/dev/null || true) | head -1)
