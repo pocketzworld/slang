@@ -2385,8 +2385,136 @@ void CLikeSourceEmitter::emitCallExpr(IRCall* inst, EmitOpInfo outerPrec)
     }
 }
 
+// `-relaxed-half` storage (see usesRelaxedHalfFloatStorage).
+
+static bool _isHalfBasedType(IRType* type)
+{
+    for (;;)
+    {
+        if (auto arrayType = as<IRArrayTypeBase>(type))
+            type = arrayType->getElementType();
+        else if (auto vectorType = as<IRVectorType>(type))
+            type = vectorType->getElementType();
+        else if (auto matrixType = as<IRMatrixType>(type))
+            type = matrixType->getElementType();
+        else
+            break;
+    }
+    return type && type->getOp() == kIROp_HalfType;
+}
+
+// The struct a field address or extraction reads from, through pointers and buffers.
+static IRInst* _getAccessedStructType(IRInst* base)
+{
+    IRInst* type = base->getDataType();
+    for (;;)
+    {
+        if (auto ptrType = as<IRPtrTypeBase>(type))
+            type = ptrType->getValueType();
+        else if (auto group = as<IRUniformParameterGroupType>(type))
+            type = group->getElementType();
+        else
+            break;
+    }
+    return type;
+}
+
+static IRStructField* _findStructField(IRInst* structType, IRInst* key)
+{
+    if (auto s = as<IRStructType>(structType))
+        for (auto field : s->getFields())
+            if (field->getKey() == key)
+                return field;
+    return nullptr;
+}
+
+bool CLikeSourceEmitter::isRelaxedHalfStorageStruct(IRInst* type)
+{
+    if (!usesRelaxedHalfFloatStorage())
+        return false;
+    if (!m_relaxedHalfStorageStructsFound)
+    {
+        // The structs held by constant buffers.
+        m_relaxedHalfStorageStructsFound = true;
+        for (auto inst : m_irModule->getGlobalInsts())
+        {
+            IRInst* valueType = nullptr;
+            if (auto group = as<IRUniformParameterGroupType>(inst))
+                valueType = group->getElementType();
+            else if (auto ptrType = as<IRPtrTypeBase>(inst))
+            {
+                if (ptrType->getAddressSpace() == AddressSpace::Uniform)
+                    valueType = ptrType->getValueType();
+            }
+            if (auto structType = as<IRStructType>(valueType))
+                m_relaxedHalfStorageStructs.add(structType);
+        }
+    }
+    return m_relaxedHalfStorageStructs.contains(type);
+}
+
+bool CLikeSourceEmitter::isRelaxedHalfStorageField(IRStructType* structType, IRStructField* field)
+{
+    return _isHalfBasedType(field->getFieldType()) && isRelaxedHalfStorageStruct(structType);
+}
+
+bool CLikeSourceEmitter::isRelaxedHalfStorageRead(IRInst* inst)
+{
+    IRInst* access = nullptr;
+    if (inst->getOp() == kIROp_FieldExtract)
+        access = inst;
+    else if (inst->getOp() == kIROp_Load)
+    {
+        access = inst->getOperand(0);
+        while (access->getOp() == kIROp_GetElementPtr)
+            access = access->getOperand(0);
+        if (access->getOp() != kIROp_FieldAddress)
+            return false;
+    }
+    else
+        return false;
+    auto structType = _getAccessedStructType(access->getOperand(0));
+    if (!isRelaxedHalfStorageStruct(structType))
+        return false;
+    auto field = _findStructField(structType, access->getOperand(1));
+    return field && _isHalfBasedType(field->getFieldType()) &&
+           !as<IRArrayTypeBase>(inst->getDataType());
+}
+
+IRType* CLikeSourceEmitter::getRelaxedHalfStorageType(IRType* type)
+{
+    IRBuilder builder(m_irModule);
+    builder.setInsertInto(m_irModule->getModuleInst());
+    if (auto arrayType = as<IRArrayType>(type))
+        return builder.getArrayType(
+            getRelaxedHalfStorageType(arrayType->getElementType()),
+            arrayType->getElementCount());
+    if (auto vectorType = as<IRVectorType>(type))
+        return builder.getVectorType(builder.getFloatType(), vectorType->getElementCount());
+    if (auto matrixType = as<IRMatrixType>(type))
+        return builder.getMatrixType(
+            builder.getFloatType(),
+            matrixType->getRowCount(),
+            matrixType->getColumnCount(),
+            matrixType->getLayout());
+    return builder.getFloatType();
+}
+
 void CLikeSourceEmitter::emitInstExpr(IRInst* inst, const EmitOpInfo& inOuterPrec)
 {
+    // A relaxed `half` read from its 32-bit storage is converted to `half`.
+    if (inst != m_relaxedHalfReadInProgress && isRelaxedHalfStorageRead(inst))
+    {
+        auto outer = m_relaxedHalfReadInProgress;
+        m_relaxedHalfReadInProgress = inst;
+        emitType(inst->getDataType());
+        m_writer->emit("(");
+        emitInstExpr(inst, getInfo(EmitOp::General));
+        m_writer->emit(")");
+        m_relaxedHalfReadInProgress = outer;
+        return;
+    }
+
     // Try target specific impl first
     if (tryEmitInstExprImpl(inst, inOuterPrec))
     {
@@ -4618,7 +4746,9 @@ void CLikeSourceEmitter::emitStructDeclarationsBlock(
         emitSemanticsPrefix(fieldKey);
         emitStructFieldAttributes(structType, ff, allowOffsetLayout);
         emitMemoryQualifiers(fieldKey);
-        if (!tryEmitStructFieldStorageTypeImpl(structType, ff))
+        if (isRelaxedHalfStorageField(structType, ff))
+            emitType(getRelaxedHalfStorageType(fieldType), getName(fieldKey));
+        else
             emitType(fieldType, getName(fieldKey));
         emitSemantics(fieldKey, allowOffsetLayout);
         emitPostDeclarationAttributesForType(fieldType);

@@ -81,6 +81,12 @@ protected:
     }
 
     virtual bool tryEmitInstExprImpl(IRInst* inst, const EmitOpInfo& inOuterPrec) SLANG_OVERRIDE;
+    // `-relaxed-half`: FXC lays out `min16float` in a constant buffer apart from floats, so
+    // constant-buffer half fields are stored as float.
+    virtual bool usesRelaxedHalfFloatStorage() SLANG_OVERRIDE
+    {
+        return getTargetProgram()->getOptionSet().getBoolOption(CompilerOptionName::RelaxedHalf);
+    }
     virtual bool tryEmitInstStmtImpl(IRInst* inst) SLANG_OVERRIDE;
     virtual void emitSimpleValueImpl(IRInst* inst) SLANG_OVERRIDE;
     virtual bool shouldFoldInstIntoUseSites(IRInst* inst) SLANG_OVERRIDE;

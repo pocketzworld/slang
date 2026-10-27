@@ -462,12 +462,19 @@ public:
     void emitPostKeywordTypeAttributes(IRInst* inst) { emitPostKeywordTypeAttributesImpl(inst); }
 
     virtual void emitMemoryQualifiers(IRInst* /*varInst*/){};
-    /// Emit a struct field whose storage type differs from its value type (e.g. a
-    /// relaxed `half` stored as `float`), returning false to emit it as usual.
-    virtual bool tryEmitStructFieldStorageTypeImpl(IRStructType*, IRStructField*)
-    {
-        return false;
-    }
+
+    /// `-relaxed-half` on a target whose own reduced-precision type does not take 4 bytes in a
+    /// constant buffer (Metal's `half`; FXC lays out `min16float` apart from floats): a half
+    /// field of a constant buffer is stored as a float and read as half.
+    virtual bool usesRelaxedHalfFloatStorage() { return false; }
+    bool isRelaxedHalfStorageField(IRStructType* structType, IRStructField* field);
+    bool isRelaxedHalfStorageStruct(IRInst* type);
+    bool isRelaxedHalfStorageRead(IRInst* inst);
+    IRType* getRelaxedHalfStorageType(IRType* type);
+    bool m_relaxedHalfStorageStructsFound = false;
+    HashSet<IRInst*> m_relaxedHalfStorageStructs;
+    IRInst* m_relaxedHalfReadInProgress = nullptr;
+
     virtual void emitStructFieldAttributes(
         IRStructType* /* structType */,
         IRStructField* /* field */,

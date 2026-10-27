@@ -107,15 +107,8 @@ protected:
 
     virtual void _emitType(IRType* type, DeclaratorInfo* declarator) SLANG_OVERRIDE;
 
-    // `-relaxed-half`: constant-buffer `half` fields are stored as `float`.
-    virtual bool tryEmitStructFieldStorageTypeImpl(IRStructType* structType, IRStructField* field)
-        SLANG_OVERRIDE;
-    bool _isRelaxedHalfStorageStruct(IRInst* type);
-    bool _isRelaxedHalfStorageRead(IRInst* inst);
-    void _emitRelaxedHalfStorageType(IRType* type);
-    bool m_relaxedHalfStorageStructsFound = false;
-    HashSet<IRInst*> m_relaxedHalfStorageStructs;
-    IRInst* m_relaxedHalfReadInProgress = nullptr;
+    // `-relaxed-half`: Metal's `half` is 2 bytes, so constant-buffer half fields are stored as float.
+    virtual bool usesRelaxedHalfFloatStorage() SLANG_OVERRIDE;
 
     void _emitHLSLParameterGroup(IRGlobalParam* varDecl, IRUniformParameterGroupType* type);
 
