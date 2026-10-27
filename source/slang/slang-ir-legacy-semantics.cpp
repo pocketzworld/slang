@@ -75,11 +75,7 @@ struct LegacySemanticsContext
         if (!decoration)
             return false;
         String newName;
-        if (!getLegacySemanticReplacement(
-                stage,
-                isOutput,
-                decoration->getSemanticName(),
-                newName))
+        if (!getLegacySemanticReplacement(stage, isOutput, decoration->getSemanticName(), newName))
             return false;
         IRBuilder builder(module);
         builder.addSemanticDecoration(

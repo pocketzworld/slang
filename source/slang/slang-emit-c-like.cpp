@@ -2537,7 +2537,8 @@ void CLikeSourceEmitter::splitRelaxedHalfArrayReads(IRModule* module)
             return;
         bool onlyIndexed = true;
         for (auto use = inst->firstUse; use; use = use->nextUse)
-            if (use->getUser()->getOp() != kIROp_GetElement || use->getUser()->getOperand(0) != inst)
+            if (use->getUser()->getOp() != kIROp_GetElement ||
+                use->getUser()->getOperand(0) != inst)
                 onlyIndexed = false;
         if (!onlyIndexed)
             reads.add(inst);

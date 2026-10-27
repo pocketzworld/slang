@@ -1046,7 +1046,9 @@ SLANG_API SlangReflection* spGetReflection(slang::ICompileRequest* request)
     return request->getReflection();
 }
 
-SLANG_API SlangReflection* spGetReflectionForTarget(slang::ICompileRequest* request, int targetIndex)
+SLANG_API SlangReflection* spGetReflectionForTarget(
+    slang::ICompileRequest* request,
+    int targetIndex)
 {
     SLANG_ASSERT(request);
     auto endToEndRequest = Slang::asInternal(request);

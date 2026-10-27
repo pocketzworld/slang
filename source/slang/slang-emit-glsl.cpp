@@ -614,7 +614,8 @@ void GLSLSourceEmitter::_emitGLSLParameterGroup(
         m_writer->emit(esBlockName);
     else
         m_writer->emit(_generateUniqueName(
-            (StringBuilder() << "block_" << getUnmangledName(type->getElementType()).getUnownedSlice())
+            (StringBuilder() << "block_"
+                             << getUnmangledName(type->getElementType()).getUnownedSlice())
                 .getUnownedSlice()));
 
     auto elementType = type->getElementType();
@@ -2375,8 +2376,7 @@ void GLSLSourceEmitter::_findGLSLESCombinedSamplers(IRModule* module)
         {
             GLSLESCombinedSampler entry;
             entry.sampler = sampler;
-            entry.name =
-                ownName ? getName(texture) : (getName(texture) + "_" + getName(sampler));
+            entry.name = ownName ? getName(texture) : (getName(texture) + "_" + getName(sampler));
             combined.add(entry);
         }
         if (ownName)

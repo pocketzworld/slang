@@ -501,7 +501,8 @@ void TextureTypeInfo::writeGetDimensionFunctions()
 
                     if (includeMipInfo)
                     {
-                        glsl << ", ($" << aa++ << " = " << cv << "textureQueryLevels($0)" << ce << ")";
+                        glsl << ", ($" << aa++ << " = " << cv << "textureQueryLevels($0)" << ce
+                             << ")";
                     }
                 };
                 glsl << "if (isCombined == 0) { "
