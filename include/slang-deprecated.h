@@ -423,6 +423,8 @@ extern "C"
 
     // get reflection data from a compilation request
     SLANG_API SlangReflection* spGetReflection(SlangCompileRequest* request);
+    // get reflection data for one target (by the order the targets were added) of a request
+    SLANG_API SlangReflection* spGetReflectionForTarget(SlangCompileRequest* request, int targetIndex);
 
     // User Attribute
     SLANG_API char const* spReflectionUserAttribute_GetName(SlangReflectionUserAttribute* attrib);

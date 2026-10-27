@@ -2094,6 +2094,19 @@ int EndToEndCompileRequest::getTranslationUnitCount()
     return (int)getFrontEndReq()->translationUnits.getCount();
 }
 
+// An entry point's code on a target, generated now when the compile did not (a target written as
+// one program, such as Metal on its own, has only the whole program's); null when it fails, the
+// errors in the request's diagnostics.
+static IArtifact* _getOrCreateEntryPointArtifact(
+    EndToEndCompileRequest* req,
+    TargetProgram* targetProgram,
+    Index entryPointIndex)
+{
+    if (auto artifact = targetProgram->getExistingEntryPointResult(entryPointIndex))
+        return artifact;
+    return targetProgram->getOrCreateEntryPointResult(entryPointIndex, req->getSink());
+}
+
 void const* EndToEndCompileRequest::getEntryPointCode(int entryPointIndex, size_t* outSize)
 {
     // Zero the size initially, in case need to return nullptr for error.
@@ -2122,7 +2135,7 @@ void const* EndToEndCompileRequest::getEntryPointCode(int entryPointIndex, size_
     auto targetProgram = program->getTargetProgram(targetReq);
     if (!targetProgram)
         return nullptr;
-    IArtifact* artifact = targetProgram->getExistingEntryPointResult(entryPointIndex);
+    IArtifact* artifact = _getOrCreateEntryPointArtifact(this, targetProgram, entryPointIndex);
     if (!artifact)
     {
         return nullptr;
@@ -2192,8 +2205,8 @@ static SlangResult _getEntryPointResult(
     if (!targetProgram)
         return SLANG_FAIL;
 
-    outArtifact = targetProgram->getExistingEntryPointResult(entryPointIndex);
-    return SLANG_OK;
+    outArtifact = _getOrCreateEntryPointArtifact(req, targetProgram, entryPointIndex);
+    return outArtifact ? SLANG_OK : SLANG_FAIL;
 }
 
 static SlangResult _getWholeProgramResult(
@@ -2389,22 +2402,19 @@ SlangResult EndToEndCompileRequest::processCommandLineArguments(
 
 SlangReflection* EndToEndCompileRequest::getReflection()
 {
+    // `spGetReflection()` is shorthand for `spGetReflectionForTarget(req, 0)`.
+    return getReflectionForTarget(0);
+}
+
+SlangReflection* EndToEndCompileRequest::getReflectionForTarget(Slang::Index targetIndex)
+{
     auto linkage = getLinkage();
     auto program = getSpecializedGlobalAndEntryPointsComponentType();
     if (!(linkage && program))
         return nullptr;
 
-    // Note(tfoley): The API signature doesn't let the client
-    // specify which target they want to access reflection
-    // information for, so for now we default to the first one.
-    //
-    // TODO: Add a new `spGetReflectionForTarget(req, targetIndex)`
-    // so that we can do this better, and make it clear that
-    // `spGetReflection()` is shorthand for `targetIndex == 0`.
-    //
-    Slang::Index targetIndex = 0;
     auto targetCount = linkage->targets.getCount();
-    if (targetIndex >= targetCount)
+    if (targetIndex < 0 || targetIndex >= targetCount)
         return nullptr;
 
     auto targetReq = linkage->targets[targetIndex];
