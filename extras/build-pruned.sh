@@ -41,7 +41,7 @@ cmake -S . -B "$build" ${generator[@]+"${generator[@]}"} -DCMAKE_BUILD_TYPE=Rele
     -DSLANG_ENABLE_RELEASE_LTO="${SLANG_PRUNED_LTO:-OFF}"
 cmake --build "$build" --config Release --target slangc --parallel
 
-lib=$(ls "$build"/Release/bin/slang-compiler.dll "$build"/Release/lib/libslang-compiler.dylib \
-      "$build"/Release/lib/libslang-compiler.so 2>/dev/null | head -1)
+lib=$( (ls "$build"/Release/bin/slang-compiler.dll "$build"/Release/lib/libslang-compiler.dylib \
+      "$build"/Release/lib/libslang-compiler.so 2>/dev/null || true) | head -1)
 case "$lib" in *.dylib|*.so) strip -x "$lib" ;; esac
 echo "built in $(( $(date +%s) - start )) s: $lib ($(wc -c < "$lib") bytes)"
