@@ -9777,7 +9777,7 @@ matrix<T,N,M> clamp(matrix<T,N,M> x, matrix<T,N,M> minBound, matrix<T,N,M> maxBo
 
 /// Clip (discard) fragment conditionally
 __generic<T : __BuiltinFloatingPointType>
-[require(cpp_cuda_glsl_hlsl_spirv, fragment)]
+[require(cpp_cuda_glsl_hlsl_metal_spirv_wgsl, fragment)]
 void clip(T x)
 {
     __target_switch
@@ -9789,7 +9789,7 @@ void clip(T x)
 }
 
 __generic<T : __BuiltinFloatingPointType, let N : int>
-[require(cpp_cuda_glsl_hlsl_spirv, fragment)]
+[require(cpp_cuda_glsl_hlsl_metal_spirv_wgsl, fragment)]
 void clip(vector<T,N> x)
 {
     __target_switch
@@ -9801,7 +9801,7 @@ void clip(vector<T,N> x)
 }
 
 __generic<T : __BuiltinFloatingPointType, let N : int, let M : int>
-[require(cpp_cuda_glsl_hlsl_spirv, fragment)]
+[require(cpp_cuda_glsl_hlsl_metal_spirv_wgsl, fragment)]
 void clip(matrix<T,N,M> x)
 {
     __target_switch
