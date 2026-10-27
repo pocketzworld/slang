@@ -438,8 +438,12 @@ void TextureTypeInfo::writeGetDimensionFunctions()
                 auto emitIntrinsic = [&](UnownedStringSlice funcName, bool useLodStr)
                 {
                     int aa = 1;
+                    // GLSL's size queries return `int`; a `uint` or `float` out-parameter takes
+                    // it converted (GLSL ES has no implicit conversion from `int`).
+                    String cv = dimType == DimType::Int ? String() : String(rawT) + "(";
+                    const char* ce = dimType == DimType::Int ? "" : ")";
                     StringBuilder opStrSB;
-                    opStrSB << " = " << funcName << "($0";
+                    opStrSB << " = " << cv << funcName << "($0";
                     if (useLodStr)
                     {
                         String lodStr = ", 0";
@@ -462,21 +466,21 @@ void TextureTypeInfo::writeGetDimensionFunctions()
                         {
                             glsl << ".x";
                         }
-                        glsl << ")";
+                        glsl << ce << ")";
                         cc = 1;
                         break;
 
                     case SLANG_TEXTURE_2D:
                     case SLANG_TEXTURE_CUBE:
-                        glsl << "($" << aa++ << opStr << ").x)";
-                        glsl << ", ($" << aa++ << opStr << ").y)";
+                        glsl << "($" << aa++ << opStr << ").x" << ce << ")";
+                        glsl << ", ($" << aa++ << opStr << ").y" << ce << ")";
                         cc = 2;
                         break;
 
                     case SLANG_TEXTURE_3D:
-                        glsl << "($" << aa++ << opStr << ").x)";
-                        glsl << ", ($" << aa++ << opStr << ").y)";
-                        glsl << ", ($" << aa++ << opStr << ").z)";
+                        glsl << "($" << aa++ << opStr << ").x" << ce << ")";
+                        glsl << ", ($" << aa++ << opStr << ").y" << ce << ")";
+                        glsl << ", ($" << aa++ << opStr << ").z" << ce << ")";
                         cc = 3;
                         break;
 
@@ -487,17 +491,17 @@ void TextureTypeInfo::writeGetDimensionFunctions()
 
                     if (isArray)
                     {
-                        glsl << ", ($" << aa++ << opStr << ")." << kComponentNames[cc] << ")";
+                        glsl << ", ($" << aa++ << opStr << ")." << kComponentNames[cc] << ce << ")";
                     }
 
                     if (isMultisample)
                     {
-                        glsl << ", ($" << aa++ << " = textureSamples($0))";
+                        glsl << ", ($" << aa++ << " = " << cv << "textureSamples($0)" << ce << ")";
                     }
 
                     if (includeMipInfo)
                     {
-                        glsl << ", ($" << aa++ << " = textureQueryLevels($0))";
+                        glsl << ", ($" << aa++ << " = " << cv << "textureQueryLevels($0)" << ce << ")";
                     }
                 };
                 glsl << "if (isCombined == 0) { "
