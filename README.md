@@ -5,6 +5,8 @@ SPDX-License-Identifier: CC-BY-4.0
 
 # Slang
 
+> This branch (`spike/highrise`, based on the `v2026.20` release) carries modifications by Pocket Worlds. Licensed under Apache 2.0, as the original.
+
 ![CI Status](https://github.com/shader-slang/slang/actions/workflows/ci.yml/badge.svg?branch=master)
 ![CTS Status](https://github.com/shader-slang/slang/actions/workflows/nightly-slang-vkglcts-test.yml/badge.svg)
 
