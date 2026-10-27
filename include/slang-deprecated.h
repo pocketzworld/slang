@@ -733,6 +733,9 @@ extern "C"
     /** DEPRECATED: use `slang::VariableReflection::getDefaultValueBlob` instead. */
     SLANG_API SlangResult
     spReflectionVariable_GetDefaultValueFloat(SlangReflectionVariable* inVar, float* rs);
+    /** The default value of a variable as bytes (null blob when it has none). */
+    SLANG_API SlangResult
+    spReflectionVariable_GetDefaultValueBlob(SlangReflectionVariable* var, ISlangBlob** outBlob);
     SLANG_API SlangReflectionGeneric* spReflectionVariable_GetGenericContainer(
         SlangReflectionVariable* var);
     SLANG_API SlangReflectionVariable* spReflectionVariable_applySpecializations(

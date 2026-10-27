@@ -4215,6 +4215,15 @@ SLANG_API SlangResult slang::VariableReflection::getDefaultValueBlob(ISlangBlob*
     return SLANG_OK;
 }
 
+// The default value of a variable as bytes, for callers of the C API (see getDefaultValueBlob).
+SLANG_API SlangResult
+spReflectionVariable_GetDefaultValueBlob(SlangReflectionVariable* var, ISlangBlob** outBlob)
+{
+    if (!var)
+        return SLANG_E_INVALID_ARG;
+    return ((slang::VariableReflection*)var)->getDefaultValueBlob(outBlob);
+}
+
 SLANG_API SlangResult
 spReflectionVariable_GetDefaultValueInt(SlangReflectionVariable* inVar, int64_t* rs)
 {
