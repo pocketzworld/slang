@@ -63,6 +63,7 @@
 #include "slang-ir-insts.h"
 #include "slang-ir-late-require-capability.h"
 #include "slang-ir-layout.h"
+#include "slang-ir-legacy-semantics.h"
 #include "slang-ir-legalize-array-return-type.h"
 #include "slang-ir-legalize-binary-operator.h"
 #include "slang-ir-legalize-composite-select.h"
@@ -1070,6 +1071,12 @@ Result linkAndOptimizeIR(
         builder.setInsertInto(irModule->getModuleInst());
         builder.emitDebugBuildIdentifier(buildIdentifier.getUnownedSlice(), buildIdentifierFlags);
     }
+
+    // Direct3D 9 semantics that name system values (the layouts already treat them so).
+    if (targetCompilerOptions.getBoolOption(CompilerOptionName::LegacySemantics) ||
+        targetCompilerOptions.getBoolOption(
+            CompilerOptionName::EnableExtendedHLSLBackwardsCompatibility))
+        SLANG_PASS(applyLegacySemantics);
 
     validateIRModuleIfEnabled(codeGenContext, irModule);
 

@@ -373,6 +373,7 @@ void CompilerOptionSet::writeCommandLineArgs(Session* globalSession, StringBuild
         case CompilerOptionName::EnableExtendedHLSLBackwardsCompatibility:
         case CompilerOptionName::RelaxedHalf:
         case CompilerOptionName::GLSLES:
+        case CompilerOptionName::LegacySemantics:
         case CompilerOptionName::TrackLiveness:
         case CompilerOptionName::LoopInversion:
         case CompilerOptionName::AllowGLSL:

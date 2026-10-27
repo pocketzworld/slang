@@ -1372,6 +1372,12 @@ typedef uint32_t SlangSizeT;
         // qualifiers, combined samplers, no binding layouts, varyings matched by name.
         GLSLES = 165,
 
+        // `bool`: Direct3D 9 semantics map to system values as FXC's `/Gec` maps them:
+        // `POSITION` (vertex output, fragment input) and `VPOS` to `SV_Position`, `VFACE` to
+        // `SV_IsFrontFace`, and fragment-output `COLORn` and `DEPTH` to `SV_Target[n]` and
+        // `SV_Depth`. Also implied by `EnableExtendedHLSLBackwardsCompatibility`.
+        LegacySemantics = 166,
+
         // Do not assign an explicit value to CountOf. It must remain one past the last option,
         // which it derives implicitly from the preceding (highest-valued) enumerator.
         CountOf,

@@ -1274,6 +1274,12 @@ void initCommandOptions(CommandOptions& options)
          "-glsl-es",
          nullptr,
          "Write GLSL ES 3.00 rather than desktop/Vulkan GLSL when the target is GLSL."},
+        {OptionKind::LegacySemantics,
+         "-legacy-semantics",
+         nullptr,
+         "Map Direct3D 9 semantics to system values as FXC's /Gec does: POSITION (vertex output, "
+         "fragment input) and VPOS to SV_Position, VFACE to SV_IsFrontFace, and fragment-output "
+         "COLORn and DEPTH to SV_Target[n] and SV_Depth. Implied by -Gec."},
         {OptionKind::EnableExtendedHLSLBackwardsCompatibility,
          "-Gec",
          nullptr,
@@ -2940,6 +2946,7 @@ SlangResult OptionsParser::_parse(int argc, char const* const* argv)
         case OptionKind::EnableExtendedHLSLBackwardsCompatibility:
         case OptionKind::RelaxedHalf:
         case OptionKind::GLSLES:
+        case OptionKind::LegacySemantics:
         case OptionKind::EnableExperimentalDynamicDispatch:
         case OptionKind::EmitIr:
         case OptionKind::DumpIntermediates:

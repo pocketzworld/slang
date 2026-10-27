@@ -1,8 +1,10 @@
 // slang-parameter-binding.cpp
 #include "slang-parameter-binding.h"
 
+#include "../core/slang-char-util.h"
 #include "compiler-core/slang-artifact-desc-util.h"
 #include "slang-compiler.h"
+#include "slang-ir-legacy-semantics.h"
 #include "slang-ir-string-hash.h"
 #include "slang-ir-util.h"
 #include "slang-lookup.h"
@@ -1999,6 +2001,36 @@ SimpleSemanticInfo decomposeSimpleSemantic(HLSLSimpleSemantic* semantic)
     return info;
 }
 
+// `-legacy-semantics` (or `-Gec`): a Direct3D 9 semantic that names a system value for this
+// stage and direction is laid out as that system value (see getLegacySemanticReplacement).
+static void _applyLegacySemantic(
+    ParameterBindingContext* context,
+    EntryPointParameterState const& state,
+    HLSLSimpleSemantic* semantic,
+    SimpleSemanticInfo& ioInfo)
+{
+    if (state.directionMask != kEntryPointParameterDirection_Input &&
+        state.directionMask != kEntryPointParameterDirection_Output)
+        return;
+    auto& optionSet = context->getTargetProgram()->getOptionSet();
+    if (!optionSet.getBoolOption(CompilerOptionName::LegacySemantics) &&
+        !optionSet.getBoolOption(CompilerOptionName::EnableExtendedHLSLBackwardsCompatibility))
+        return;
+    String name;
+    if (!getLegacySemanticReplacement(
+            state.stage,
+            state.directionMask == kEntryPointParameterDirection_Output,
+            semantic->name.getContent(),
+            name))
+        return;
+    Index indexLoc = name.getLength();
+    while (indexLoc > 0 && CharUtil::isDigit(name[indexLoc - 1]))
+        indexLoc--;
+    ioInfo.name = name.subString(0, indexLoc);
+    ioInfo.index =
+        indexLoc < name.getLength() ? int(strtol(name.getBuffer() + indexLoc, nullptr, 10)) : 0;
+}
+
 static RefPtr<TypeLayout> processSimpleEntryPointParameter(
     ParameterBindingContext* context,
     Type* type,
@@ -2223,6 +2255,7 @@ static RefPtr<TypeLayout> processEntryPointVaryingParameterDecl(
         if (auto semantic = decl->findModifier<HLSLSimpleSemantic>())
         {
             semanticInfo = decomposeSimpleSemantic(semantic);
+            _applyLegacySemantic(context, state, semantic, semanticInfo);
             semanticIndex = semanticInfo.index;
 
             state.optSemanticName = &semanticInfo.name;
