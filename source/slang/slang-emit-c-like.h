@@ -460,6 +460,12 @@ public:
     void emitPostKeywordTypeAttributes(IRInst* inst) { emitPostKeywordTypeAttributesImpl(inst); }
 
     virtual void emitMemoryQualifiers(IRInst* /*varInst*/){};
+    /// Emit a struct field whose storage type differs from its value type (e.g. a
+    /// relaxed `half` stored as `float`), returning false to emit it as usual.
+    virtual bool tryEmitStructFieldStorageTypeImpl(IRStructType*, IRStructField*)
+    {
+        return false;
+    }
     virtual void emitStructFieldAttributes(
         IRStructType* /* structType */,
         IRStructField* /* field */,

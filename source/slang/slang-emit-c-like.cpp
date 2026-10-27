@@ -4600,7 +4600,8 @@ void CLikeSourceEmitter::emitStructDeclarationsBlock(
         emitSemanticsPrefix(fieldKey);
         emitStructFieldAttributes(structType, ff, allowOffsetLayout);
         emitMemoryQualifiers(fieldKey);
-        emitType(fieldType, getName(fieldKey));
+        if (!tryEmitStructFieldStorageTypeImpl(structType, ff))
+            emitType(fieldType, getName(fieldKey));
         emitSemantics(fieldKey, allowOffsetLayout);
         emitPostDeclarationAttributesForType(fieldType);
         emitStructDeclarationSeparator();

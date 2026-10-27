@@ -741,8 +741,148 @@ bool MetalSourceEmitter::tryEmitInstStmtImpl(IRInst* inst)
     return false;
 }
 
+// `-relaxed-half`: a `half` field of a constant buffer is stored as a 32-bit float (Unity's
+// layout, which the type layout reports) and read as `half`.
+
+static bool _isHalfBasedForStorage(IRType* type)
+{
+    for (;;)
+    {
+        if (auto arrayType = as<IRArrayTypeBase>(type))
+            type = arrayType->getElementType();
+        else if (auto vectorType = as<IRVectorType>(type))
+            type = vectorType->getElementType();
+        else if (auto matrixType = as<IRMatrixType>(type))
+            type = matrixType->getElementType();
+        else
+            break;
+    }
+    return type && type->getOp() == kIROp_HalfType;
+}
+
+bool MetalSourceEmitter::_isRelaxedHalfStorageStruct(IRInst* type)
+{
+    if (!getTargetProgram()->getOptionSet().getBoolOption(CompilerOptionName::RelaxedHalf))
+        return false;
+    if (!m_relaxedHalfStorageStructsFound)
+    {
+        m_relaxedHalfStorageStructsFound = true;
+        for (auto inst : m_irModule->getGlobalInsts())
+        {
+            IRInst* valueType = nullptr;
+            if (auto group = as<IRUniformParameterGroupType>(inst))
+                valueType = group->getElementType();
+            else if (auto ptrType = as<IRPtrTypeBase>(inst))
+            {
+                if (ptrType->getAddressSpace() == AddressSpace::Uniform)
+                    valueType = ptrType->getValueType();
+            }
+            if (auto structType = as<IRStructType>(valueType))
+                m_relaxedHalfStorageStructs.add(structType);
+        }
+    }
+    return m_relaxedHalfStorageStructs.contains(type);
+}
+
+// The struct a field address or extraction reads from, through pointers and buffers.
+static IRInst* _getAccessedStructType(IRInst* base)
+{
+    IRInst* type = base->getDataType();
+    for (;;)
+    {
+        if (auto ptrType = as<IRPtrTypeBase>(type))
+            type = ptrType->getValueType();
+        else if (auto group = as<IRUniformParameterGroupType>(type))
+            type = group->getElementType();
+        else
+            break;
+    }
+    return type;
+}
+
+static IRStructField* _findStructField(IRInst* structType, IRInst* key)
+{
+    if (auto s = as<IRStructType>(structType))
+        for (auto field : s->getFields())
+            if (field->getKey() == key)
+                return field;
+    return nullptr;
+}
+
+bool MetalSourceEmitter::_isRelaxedHalfStorageRead(IRInst* inst)
+{
+    IRInst* access = nullptr;
+    if (inst->getOp() == kIROp_FieldExtract)
+        access = inst;
+    else if (inst->getOp() == kIROp_Load)
+    {
+        access = inst->getOperand(0);
+        while (access->getOp() == kIROp_GetElementPtr)
+            access = access->getOperand(0);
+        if (access->getOp() != kIROp_FieldAddress)
+            return false;
+    }
+    else
+        return false;
+    auto structType = _getAccessedStructType(access->getOperand(0));
+    if (!_isRelaxedHalfStorageStruct(structType))
+        return false;
+    auto field = _findStructField(structType, access->getOperand(1));
+    return field && _isHalfBasedForStorage(field->getFieldType()) &&
+           !as<IRArrayTypeBase>(inst->getDataType());
+}
+
+void MetalSourceEmitter::_emitRelaxedHalfStorageType(IRType* type)
+{
+    if (auto arrayType = as<IRArrayType>(type))
+    {
+        m_writer->emit("array<");
+        _emitRelaxedHalfStorageType(arrayType->getElementType());
+        m_writer->emit(", ");
+        emitOperand(arrayType->getElementCount(), getInfo(EmitOp::General));
+        m_writer->emit(">");
+    }
+    else if (auto vectorType = as<IRVectorType>(type))
+    {
+        m_writer->emit("float");
+        m_writer->emit(getIntVal(vectorType->getElementCount()));
+    }
+    else if (auto matrixType = as<IRMatrixType>(type))
+    {
+        m_writer->emit("float");
+        m_writer->emit(getIntVal(matrixType->getRowCount()));
+        m_writer->emit("x");
+        m_writer->emit(getIntVal(matrixType->getColumnCount()));
+    }
+    else
+        m_writer->emit("float");
+}
+
+bool MetalSourceEmitter::tryEmitStructFieldStorageTypeImpl(
+    IRStructType* structType,
+    IRStructField* field)
+{
+    if (!_isHalfBasedForStorage(field->getFieldType()) || !_isRelaxedHalfStorageStruct(structType))
+        return false;
+    _emitRelaxedHalfStorageType(field->getFieldType());
+    m_writer->emit(" ");
+    m_writer->emit(getName(field->getKey()));
+    return true;
+}
 bool MetalSourceEmitter::tryEmitInstExprImpl(IRInst* inst, const EmitOpInfo& inOuterPrec)
 {
+    // A relaxed `half` read from its 32-bit storage is converted to `half`.
+    if (inst != m_relaxedHalfReadInProgress && _isRelaxedHalfStorageRead(inst))
+    {
+        auto outer = m_relaxedHalfReadInProgress;
+        m_relaxedHalfReadInProgress = inst;
+        emitType(inst->getDataType());
+        m_writer->emit("(");
+        emitInstExpr(inst, getInfo(EmitOp::General));
+        m_writer->emit(")");
+        m_relaxedHalfReadInProgress = outer;
+        return true;
+    }
     switch (inst->getOp())
     {
     case kIROp_MakeArray:
@@ -783,9 +923,9 @@ bool MetalSourceEmitter::tryEmitInstExprImpl(IRInst* inst, const EmitOpInfo& inO
             ensurePrelude(kMetalBuiltinPreludeMatrixReshape);
             m_writer->emit("_slang_matrixReshape<");
             auto matrixType = as<IRMatrixType>(inst->getDataType());
-            emitOperand(matrixType->getRowCount(), getInfo(EmitOp::General));
+            m_writer->emit(getIntVal(matrixType->getRowCount()));
             m_writer->emit(", ");
-            emitOperand(matrixType->getColumnCount(), getInfo(EmitOp::General));
+            m_writer->emit(getIntVal(matrixType->getColumnCount()));
             m_writer->emit(">(");
             emitOperand(inst->getOperand(0), getInfo(EmitOp::General));
             m_writer->emit(")");
@@ -796,7 +936,7 @@ bool MetalSourceEmitter::tryEmitInstExprImpl(IRInst* inst, const EmitOpInfo& inO
             ensurePrelude(kMetalBuiltinPreludeVectorReshape);
             m_writer->emit("_slang_vectorReshape<");
             auto vectorType = as<IRVectorType>(inst->getDataType());
-            emitOperand(vectorType->getElementCount(), getInfo(EmitOp::General));
+            m_writer->emit(getIntVal(vectorType->getElementCount()));
             m_writer->emit(">(");
             emitOperand(inst->getOperand(0), getInfo(EmitOp::General));
             m_writer->emit(")");
