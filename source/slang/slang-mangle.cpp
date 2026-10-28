@@ -128,6 +128,19 @@ void emitVal(ManglingContext* context, Val* val);
 
 void emitQualifiedName(ManglingContext* context, DeclRef<Decl> declRef, bool includeModuleName);
 
+// `__extern_cpp` (and `-no-mangle`, which puts it on every global and on a constant buffer's
+// fields) keeps a declaration's own name in the output. A field is still mangled for linkage
+// under its type, as any other field is: its own name alone would be the same symbol as a
+// global or another type's field of that name (a texture in a namespace named as a constant
+// buffer's field), which the linker would merge into one. Its name in the output is unchanged:
+// IRExternCppDecoration holds the name as written.
+static bool isLinkedByOwnName(Decl* decl)
+{
+    if (!decl->hasModifier<ExternCppModifier>())
+        return false;
+    return !(as<VarDeclBase>(decl) && as<AggTypeDecl>(decl->parentDecl));
+}
+
 // Emit the parameter-passing-mode portion of a callable parameter's mangled name.
 void emitParamPassingMode(ManglingContext* context, ParamPassingMode mode)
 {
@@ -577,7 +590,7 @@ void emitQualifiedName(ManglingContext* context, DeclRef<Decl> declRef, bool inc
         }
     }
 
-    if (declRef.getDecl()->hasModifier<ExternCppModifier>())
+    if (isLinkedByOwnName(declRef.getDecl()))
     {
         emit(context, declRef.getDecl()->getName()->text);
         return;
@@ -961,7 +974,7 @@ void mangleName(ManglingContext* context, DeclRef<Decl> declRef)
 
     // Handle `__extern_cpp` modifier by simply emitting
     // the given name.
-    if (decl->hasModifier<ExternCppModifier>())
+    if (isLinkedByOwnName(decl))
     {
         emit(context, decl->getName()->text);
         return;

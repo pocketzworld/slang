@@ -1466,7 +1466,8 @@ static void addLinkageDecoration(
         }
         else if (as<ExternCppModifier>(modifier))
         {
-            builder->addExternCppDecoration(inst, mangledName);
+            // The name as written: a field's mangled name is not its own (slang-mangle.cpp).
+            builder->addExternCppDecoration(inst, decl->getName()->text.getUnownedSlice());
         }
         else if (auto dllImportModifier = as<DllImportAttribute>(modifier))
         {
