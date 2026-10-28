@@ -92,6 +92,8 @@ void GLSLSourceEmitter::beforeComputeEmitActions(IRModule* module)
     buildEntryPointReferenceGraph(this->m_referencingEntryPoints, module);
     if (_isGLSLES())
         _findGLSLESCombinedSamplers(module);
+    if (_isGLSLES() && _isRelaxedHalf())
+        _findGLSLESHalfReadTextures(module);
 
     IRBuilder builder(module);
     for (auto globalInst : module->getGlobalInsts())
@@ -172,6 +174,10 @@ void GLSLSourceEmitter::_requireFragmentShaderBarycentric()
 
 void GLSLSourceEmitter::_requireGLSLExtension(const UnownedStringSlice& name)
 {
+    // GLSL ES: a texture is a sampler, so texelFetch and textureSize of one read without a
+    // sampler are the core language's and need no extension (ES has none of this name).
+    if (_isGLSLES() && name == toSlice("GL_EXT_samplerless_texture_functions"))
+        return;
     m_glslExtensionTracker->requireExtension(name);
 }
 
@@ -1070,7 +1076,9 @@ void GLSLSourceEmitter::_emitGLSLTextureOrTextureSamplerType(
     // relaxed `half`.
     if (_isGLSLES())
     {
-        m_writer->emit(_isHalfBasedType(type->getElementType()) ? "mediump " : "highp ");
+        m_writer->emit(
+            _isHalfBasedType(type->getElementType()) || m_glslesDeclaringHalfRead ? "mediump "
+                                                                                  : "highp ");
         if (UnownedStringSlice(baseName) == "texture")
             baseName = "sampler";
     }
@@ -2298,10 +2306,87 @@ void GLSLSourceEmitter::emitGlobalInstImpl(IRInst* inst)
         if (_isGLSLES() && as<IRGlobalParam>(inst) &&
             as<IRSamplerStateTypeBase>(unwrapArray(inst->getDataType())))
             break;
-        if (_isGLSLES() && _tryEmitGLSLESCombinedSamplers(inst))
-            break;
-        Super::emitGlobalInstImpl(inst);
+        {
+            // A texture whose every read is converted to `half` is declared mediump.
+            m_glslesDeclaringHalfRead = _isGLSLES() && m_glslesHalfReadTextures.contains(inst);
+            bool emitted = _isGLSLES() && _tryEmitGLSLESCombinedSamplers(inst);
+            if (!emitted)
+                Super::emitGlobalInstImpl(inst);
+            m_glslesDeclaringHalfRead = false;
+        }
         break;
+    }
+}
+
+// Whether a value read from a texture is only ever used converted to `half`: directly, or
+// through a swizzle or an element of it that is.
+static bool _isOnlyUsedAsHalf(IRInst* value)
+{
+    bool used = false;
+    for (auto use = value->firstUse; use; use = use->nextUse)
+    {
+        auto user = use->getUser();
+        switch (user->getOp())
+        {
+        case kIROp_FloatCast:
+            if (!_isHalfBasedType(user->getDataType()))
+                return false;
+            break;
+        case kIROp_Swizzle:
+        case kIROp_GetElement:
+            if (user->getOperand(0) != value || !_isOnlyUsedAsHalf(user))
+                return false;
+            break;
+        default:
+            return false;
+        }
+        used = true;
+    }
+    return used;
+}
+
+// -relaxed-half under -glsl-es: the textures read only at half, `(half4)t.Sample(s, uv)` as
+// `Texture2D<half4>` is, so that their samplers are declared mediump as that one's is. A
+// texture is one when it is read at least once and each read (a call taking it first and
+// returning a value) has its value used only converted to half; a query that returns nothing
+// of its texels (GetDimensions) does not count.
+static bool _getGLSLESTextureValues(IRInst* texture, List<IRInst*>& outValues);
+
+void GLSLSourceEmitter::_findGLSLESHalfReadTextures(IRModule* module)
+{
+    for (auto globalInst : module->getGlobalInsts())
+    {
+        if (!as<IRGlobalParam>(globalInst) ||
+            !as<IRTextureTypeBase>(unwrapArray(globalInst->getDataType())))
+            continue;
+        List<IRInst*> values;
+        bool other = !_getGLSLESTextureValues(globalInst, values);
+        bool halfRead = false;
+        for (auto value : values)
+        {
+            for (auto use = value->firstUse; use && !other; use = use->nextUse)
+            {
+                auto user = use->getUser();
+                if (as<IRDecoration>(user) || !as<IRBlock>(user->getParent()))
+                    continue;
+                auto call = as<IRCall>(user);
+                if (!call || call->getArgCount() < 1 || call->getArg(0) != value ||
+                    use != call->getArgs())
+                {
+                    other = true;
+                    break;
+                }
+                auto resultType = call->getDataType();
+                if (!resultType || resultType->getOp() == kIROp_VoidType)
+                    continue;
+                if (_isHalfBasedType(resultType) || _isOnlyUsedAsHalf(call))
+                    halfRead = true;
+                else
+                    other = true;
+            }
+        }
+        if (halfRead && !other)
+            m_glslesHalfReadTextures.add(globalInst);
     }
 }
 
@@ -2316,12 +2401,48 @@ String GLSLSourceEmitter::_getGLSLESBlockName(IRInst* varDecl)
     return sb.produceString();
 }
 
+// GLSL ES: the values that stand for a texture global where it is used: the global itself, or
+// for an array of textures each element taken of it (`t[i]`). False when the global is used
+// otherwise (an array passed whole).
+static bool _getGLSLESTextureValues(IRInst* texture, List<IRInst*>& outValues)
+{
+    if (!as<IRArrayTypeBase>(texture->getDataType()))
+    {
+        outValues.add(texture);
+        return true;
+    }
+    for (auto use = texture->firstUse; use; use = use->nextUse)
+    {
+        auto user = use->getUser();
+        if (as<IRDecoration>(user) || !as<IRBlock>(user->getParent()))
+            continue;
+        if (user->getOp() != kIROp_GetElement || user->getOperand(0) != texture)
+            return false;
+        outValues.add(user);
+    }
+    return true;
+}
+
+// GLSL ES: the texture global a value stands for (see _getGLSLESTextureValues), and the index
+// of the element when it is one.
+static IRInst* _getGLSLESTextureOf(IRInst* value, IRInst*& outIndex)
+{
+    outIndex = nullptr;
+    if (value->getOp() == kIROp_GetElement && as<IRGlobalParam>(value->getOperand(0)) &&
+        as<IRArrayTypeBase>(value->getOperand(0)->getDataType()))
+    {
+        outIndex = value->getOperand(1);
+        return value->getOperand(0);
+    }
+    return value;
+}
+
 // GLSL ES: the texture/sampler pairs that are sampled (see m_glslesCombinedSamplers).
 void GLSLSourceEmitter::_findGLSLESCombinedSamplers(IRModule* module)
 {
     auto isSeparateTexture = [](IRInst* inst)
     {
-        auto textureType = as<IRTextureType>(inst->getDataType());
+        auto textureType = as<IRTextureType>(unwrapArray(inst->getDataType()));
         return as<IRGlobalParam>(inst) && textureType && !textureType->isCombined();
     };
     auto isSampler = [](IRInst* inst)
@@ -2334,22 +2455,26 @@ void GLSLSourceEmitter::_findGLSLESCombinedSamplers(IRModule* module)
         if (!isSeparateTexture(globalInst))
             continue;
         List<IRInst*> samplers;
-        bool usedAlone = false;
-        for (auto use = globalInst->firstUse; use; use = use->nextUse)
+        List<IRInst*> values;
+        bool usedAlone = !_getGLSLESTextureValues(globalInst, values);
+        for (auto value : values)
         {
-            auto user = use->getUser();
-            if (!as<IRBlock>(user->getParent()))
-                continue;
-            // A sampling call takes the texture, then the sampler.
-            auto call = as<IRCall>(user);
-            if (call && call->getArgCount() >= 2 && call->getArg(0) == globalInst &&
-                use == call->getArgs() && isSampler(call->getArg(1)))
+            for (auto use = value->firstUse; use; use = use->nextUse)
             {
-                if (!samplers.contains(call->getArg(1)))
-                    samplers.add(call->getArg(1));
+                auto user = use->getUser();
+                if (as<IRDecoration>(user) || !as<IRBlock>(user->getParent()))
+                    continue;
+                // A sampling call takes the texture, then the sampler.
+                auto call = as<IRCall>(user);
+                if (call && call->getArgCount() >= 2 && call->getArg(0) == value &&
+                    use == call->getArgs() && isSampler(call->getArg(1)))
+                {
+                    if (!samplers.contains(call->getArg(1)))
+                        samplers.add(call->getArg(1));
+                }
+                else
+                    usedAlone = true;
             }
-            else
-                usedAlone = true;
         }
         if (usedAlone)
             m_glslesTexturesUsedAlone.add(globalInst);
@@ -2387,13 +2512,21 @@ void GLSLSourceEmitter::_findGLSLESCombinedSamplers(IRModule* module)
 
 void GLSLSourceEmitter::emitCombinedTextureSamplerImpl(IRInst* texture, IRInst* sampler)
 {
-    if (auto combined = m_glslesCombinedSamplers.tryGetValue(texture))
+    IRInst* index = nullptr;
+    auto global = _getGLSLESTextureOf(texture, index);
+    if (auto combined = m_glslesCombinedSamplers.tryGetValue(global))
     {
         for (auto& entry : *combined)
         {
             if (entry.sampler == sampler)
             {
                 m_writer->emit(entry.name);
+                if (index)
+                {
+                    m_writer->emit("[");
+                    emitOperand(index, getInfo(EmitOp::General));
+                    m_writer->emit("]");
+                }
                 return;
             }
         }
@@ -2406,7 +2539,8 @@ bool GLSLSourceEmitter::_tryEmitGLSLESCombinedSamplers(IRInst* inst)
     auto combined = m_glslesCombinedSamplers.tryGetValue(inst);
     if (!combined)
         return false;
-    auto textureType = as<IRTextureType>(inst->getDataType());
+    auto dataType = inst->getDataType();
+    auto textureType = as<IRTextureType>(unwrapArray(dataType));
     for (auto& entry : *combined)
     {
         m_writer->emit("uniform ");
@@ -2415,6 +2549,7 @@ bool GLSLSourceEmitter::_tryEmitGLSLESCombinedSamplers(IRInst* inst)
             m_writer->emit("Shadow");
         m_writer->emit(" ");
         m_writer->emit(entry.name);
+        emitArrayBrackets(dataType);
         m_writer->emit(";\n");
     }
     // The texture read without a sampler is declared under its own name too.
@@ -2424,6 +2559,7 @@ bool GLSLSourceEmitter::_tryEmitGLSLESCombinedSamplers(IRInst* inst)
         emitTextureOrTextureSamplerType(textureType, "sampler");
         m_writer->emit(" ");
         m_writer->emit(getName(inst));
+        emitArrayBrackets(dataType);
         m_writer->emit(";\n");
     }
     return true;
@@ -3645,18 +3781,7 @@ void GLSLSourceEmitter::emitFrontMatterImpl(TargetRequest* targetReq)
         {
             StringBuilder builder;
             m_glslExtensionTracker->appendExtensionRequireLinesForGLSL(builder);
-            // A texture is a sampler here, so texelFetch and textureSize need no extension.
-            List<UnownedStringSlice> lines;
-            StringUtil::calcLines(builder.getUnownedSlice(), lines);
-            for (auto line : lines)
-            {
-                if (line.getLength() &&
-                    line.indexOf(toSlice("GL_EXT_samplerless_texture_functions")) < 0)
-                {
-                    m_writer->emit(line);
-                    m_writer->emit("\n");
-                }
-            }
+            m_writer->emit(builder.getUnownedSlice());
         }
         m_writer->emit("precision highp float;\nprecision highp int;\n");
         m_writer->emit("precision highp sampler3D;\nprecision highp samplerCubeShadow;\n");

@@ -98,6 +98,12 @@ protected:
     String _getGLSLESBlockName(IRInst* varDecl);
     bool _tryEmitGLSLESCombinedSamplers(IRInst* inst);
 
+    /// -relaxed-half under GLSL ES: textures whose every read is converted to `half`, declared
+    /// mediump as a `Texture2D<half4>` is (m_glslesDeclaringHalfRead while one is declared).
+    HashSet<IRInst*> m_glslesHalfReadTextures;
+    bool m_glslesDeclaringHalfRead = false;
+    void _findGLSLESHalfReadTextures(IRModule* module);
+
     virtual void emitSimpleValueImpl(IRInst* inst) SLANG_OVERRIDE;
     virtual void emitLoopControlDecorationImpl(IRLoopControlDecoration* decl) SLANG_OVERRIDE;
 
