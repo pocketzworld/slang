@@ -163,6 +163,8 @@ protected:
     bool _isRelaxedHalf();
     /// `-glsl-es`: the output is GLSL ES 3.00.
     bool _isGLSLES();
+    /// `-glsl-es`: a column of a matrix that is no local variable, taken from a copy.
+    bool _tryEmitGLSLESMatrixColumn(IRInst* inst, const EmitOpInfo& inOuterPrec);
 
     void _maybeEmitGLSLCast(IRType* castType, IRInst* inst);
 

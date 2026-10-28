@@ -1353,6 +1353,69 @@ bool GLSLSourceEmitter::_isGLSLES()
     return getTargetProgram()->getOptionSet().getBoolOption(CompilerOptionName::GLSLES);
 }
 
+// -glsl-es: a column of a matrix read straight out of a uniform block (`Globals_cb.m[0]`, which
+// is row_major there), or out of a function's parameter that such a matrix is handed to, does
+// not compile on PowerVR Rogue's GLSL ES compiler (the GE8320 of a Galaxy A12: "Compile
+// failed", with no log); a whole element (`m[0][3]`) and a column of a copy do. Slang writes a
+// column for every `(float3x3)m` (the peephole pass makes the reshape its rows) and for `m[i]`,
+// so a column of any matrix that is no local variable is taken from a copy of it:
+// `mat4x4(Globals_cb.m)[0]`, which a driver folds away.
+bool GLSLSourceEmitter::_tryEmitGLSLESMatrixColumn(IRInst* inst, const EmitOpInfo& inOuterPrec)
+{
+    if (!_isGLSLES())
+        return false;
+
+    IRInst* matrix = nullptr;
+    IRInst* index = nullptr;
+    IRType* matrixType = nullptr;
+    bool throughPointer = false;
+    if (inst->getOp() == kIROp_GetElement)
+    {
+        matrix = inst->getOperand(0);
+        matrixType = matrix->getDataType();
+        if (!as<IRMatrixType>(matrixType))
+            return false;
+        // A value loaded from a local variable is that variable.
+        if (matrix->getOp() == kIROp_Load && as<IRVar>(matrix->getOperand(0)))
+            return false;
+        index = inst->getOperand(1);
+    }
+    else if (inst->getOp() == kIROp_Load)
+    {
+        auto element = as<IRGetElementPtr>(inst->getOperand(0));
+        if (!element)
+            return false;
+        matrix = element->getOperand(0);
+        auto ptrType = as<IRPtrTypeBase>(matrix->getDataType());
+        if (!ptrType || ptrType->getAddressSpace() == AddressSpace::UserPointer)
+            return false;
+        matrixType = ptrType->getValueType();
+        if (!as<IRMatrixType>(matrixType) || as<IRVar>(matrix))
+            return false;
+        index = element->getOperand(1);
+        throughPointer = true;
+    }
+    else
+    {
+        return false;
+    }
+
+    auto prec = getInfo(EmitOp::Postfix);
+    EmitOpInfo outerPrec = inOuterPrec;
+    bool needClose = maybeEmitParens(outerPrec, prec);
+    emitType(matrixType);
+    m_writer->emit("(");
+    if (throughPointer)
+        emitDereferenceOperand(matrix, getInfo(EmitOp::General));
+    else
+        emitOperand(matrix, getInfo(EmitOp::General));
+    m_writer->emit(")[");
+    emitOperand(index, getInfo(EmitOp::General));
+    m_writer->emit("]");
+    maybeCloseParens(needClose);
+    return true;
+}
+
 // Whether a declaration of this type takes `mediump` under `-relaxed-half`.
 static bool _isHalfBasedType(IRType* type)
 {
@@ -2620,8 +2683,12 @@ bool GLSLSourceEmitter::tryEmitInstExprImpl(IRInst* inst, const EmitOpInfo& inOu
             m_writer->emit("barrier();\n");
             return true;
         }
+    case kIROp_GetElement:
+        return _tryEmitGLSLESMatrixColumn(inst, inOuterPrec);
     case kIROp_Load:
         {
+            if (_tryEmitGLSLESMatrixColumn(inst, inOuterPrec))
+                return true;
             auto addr = inst->getOperand(0);
             auto ptrType = as<IRPtrType>(addr->getDataType());
             if (!ptrType)
