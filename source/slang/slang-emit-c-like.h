@@ -482,6 +482,7 @@ public:
     /// Whether a store through `ptr` writes a relaxed half into float storage.
     bool isRelaxedHalfStorageWrite(IRInst* ptr);
     void splitRelaxedHalfArrayReads(IRModule* module);
+    void splitRelaxedHalfArrayWrites(IRModule* module);
     IRType* getRelaxedHalfStorageType(IRType* type);
     bool m_relaxedHalfStorageStructsFound = false;
     HashSet<IRInst*> m_relaxedHalfStorageStructs;

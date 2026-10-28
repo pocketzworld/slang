@@ -2523,6 +2523,7 @@ void CLikeSourceEmitter::splitRelaxedHalfArrayReads(IRModule* module)
     // rebuilt from its elements, each of which is converted where it is read. An array read
     // only to be indexed is left alone.
     List<IRInst*> reads;
+    List<IRInst*> indexedValues;
     auto visit = [&](IRInst* inst, auto& self) -> void
     {
         for (auto child : inst->getChildren())
@@ -2540,14 +2541,34 @@ void CLikeSourceEmitter::splitRelaxedHalfArrayReads(IRModule* module)
             if (use->getUser()->getOp() != kIROp_GetElement ||
                 use->getUser()->getOperand(0) != inst)
                 onlyIndexed = false;
-        if (!onlyIndexed)
+        // An array read only to be indexed is left alone when its reads fold into their use
+        // sites: one use, or a value taken apart (each use given its own copy, below). A load
+        // with several uses would be copied into a variable of half elements from the float
+        // storage, which no target converts, so it is rebuilt as any other read.
+        if (!onlyIndexed ||
+            (inst->getOp() == kIROp_Load && inst->firstUse && inst->firstUse->nextUse))
             reads.add(inst);
+        else if (inst->firstUse && inst->firstUse->nextUse)
+            indexedValues.add(inst);
     };
     for (auto inst : module->getGlobalInsts())
         if (as<IRGlobalValueWithCode>(inst))
             visit(inst, visit);
 
     IRBuilder builder(module);
+    // A fresh copy of an array value taken apart from a struct or an array (through each such
+    // step that is itself an array of halves), so that it folds into the one place that uses
+    // it: an array of halves given a variable would be copied there from the float storage.
+    auto copyOf = [&](IRInst* value, auto& self) -> IRInst*
+    {
+        if ((value->getOp() != kIROp_FieldExtract && value->getOp() != kIROp_GetElement) ||
+            !as<IRArrayTypeBase>(value->getDataType()))
+            return value;
+        auto base = self(value->getOperand(0), self);
+        return value->getOp() == kIROp_FieldExtract
+                   ? builder.emitFieldExtract(value->getDataType(), base, value->getOperand(1))
+                   : builder.emitElementExtract(value->getDataType(), base, value->getOperand(1));
+    };
     // The array at `ptr` (a load) or the array value `array`, element by element.
     auto rebuild = [&](IRType* type, IRInst* ptr, IRInst* array, auto& self) -> IRInst*
     {
@@ -2565,11 +2586,27 @@ void CLikeSourceEmitter::splitRelaxedHalfArrayReads(IRModule* module)
                 elements.add(self(
                     elementType,
                     nullptr,
-                    builder.emitElementExtract(elementType, array, builder.getIntValue(i)),
+                    builder.emitElementExtract(
+                        elementType,
+                        copyOf(array, copyOf),
+                        builder.getIntValue(i)),
                     self));
         }
         return builder.emitMakeArray(arrayType, elements.getCount(), elements.getBuffer());
     };
+    for (auto value : indexedValues)
+    {
+        List<IRUse*> uses;
+        for (auto use = value->firstUse; use; use = use->nextUse)
+            uses.add(use);
+        for (auto use : uses)
+        {
+            builder.setInsertBefore(use->getUser());
+            builder.replaceOperand(use, copyOf(value, copyOf));
+        }
+        if (!value->hasUses())
+            value->removeAndDeallocate();
+    }
     for (auto read : reads)
     {
         if (!as<IRArrayType>(read->getDataType()) ||
@@ -2587,8 +2624,110 @@ void CLikeSourceEmitter::splitRelaxedHalfArrayReads(IRModule* module)
             rebuild);
         for (auto use : uses)
             builder.replaceOperand(use, rebuilt);
-        if (isLoad && !read->hasUses())
+        if (!read->hasUses())
             read->removeAndDeallocate();
+    }
+}
+
+void CLikeSourceEmitter::splitRelaxedHalfArrayWrites(IRModule* module)
+{
+    // A whole array of relaxed halves written into float storage, which no target converts as
+    // one value: a store of it is a store of each element (each converted as it is written,
+    // see isRelaxedHalfStorageWrite), and a struct made with it takes an array of floats made
+    // of its converted elements.
+    List<IRStore*> stores;
+    List<IRInst*> makes;
+    auto visit = [&](IRInst* inst, auto& self) -> void
+    {
+        for (auto child : inst->getChildren())
+            self(child, self);
+        if (auto store = as<IRStore>(inst))
+        {
+            auto valueType = store->getVal()->getDataType();
+            if (as<IRArrayType>(valueType) && _isHalfBasedType(valueType) &&
+                isRelaxedHalfStorageWrite(store->getPtr()))
+                stores.add(store);
+        }
+        else if (
+            inst->getOp() == kIROp_MakeStruct && isRelaxedHalfStorageStruct(inst->getDataType()))
+            makes.add(inst);
+    };
+    for (auto inst : module->getGlobalInsts())
+        if (as<IRGlobalValueWithCode>(inst))
+            visit(inst, visit);
+
+    IRBuilder builder(module);
+    auto split = [&](IRInst* ptr, IRInst* value, auto& self) -> void
+    {
+        auto arrayType = as<IRArrayType>(value->getDataType());
+        auto countLit = arrayType ? as<IRIntLit>(arrayType->getElementCount()) : nullptr;
+        if (!countLit)
+        {
+            builder.emitStore(ptr, value);
+            return;
+        }
+        for (IRIntegerValue i = 0; i < countLit->getValue(); i++)
+            self(
+                builder.emitElementAddress(ptr, i),
+                builder
+                    .emitElementExtract(arrayType->getElementType(), value, builder.getIntValue(i)),
+                self);
+    };
+    for (auto store : stores)
+    {
+        auto countLit =
+            as<IRIntLit>(as<IRArrayType>(store->getVal()->getDataType())->getElementCount());
+        if (!countLit)
+            continue;
+        builder.setInsertBefore(store);
+        split(store->getPtr(), store->getVal(), split);
+        store->removeAndDeallocate();
+    }
+
+    auto toStorage = [&](IRInst* value, auto& self) -> IRInst*
+    {
+        auto type = value->getDataType();
+        auto arrayType = as<IRArrayType>(type);
+        if (!arrayType)
+            return builder
+                .emitIntrinsicInst(getRelaxedHalfStorageType(type), kIROp_FloatCast, 1, &value);
+        auto countLit = as<IRIntLit>(arrayType->getElementCount());
+        if (!countLit)
+            return nullptr;
+        List<IRInst*> elements;
+        for (IRIntegerValue i = 0; i < countLit->getValue(); i++)
+        {
+            auto element = self(
+                builder
+                    .emitElementExtract(arrayType->getElementType(), value, builder.getIntValue(i)),
+                self);
+            if (!element)
+                return nullptr;
+            elements.add(element);
+        }
+        return builder.emitMakeArray(
+            getRelaxedHalfStorageType(type),
+            elements.getCount(),
+            elements.getBuffer());
+    };
+    for (auto make : makes)
+    {
+        auto structType = as<IRStructType>(make->getDataType());
+        UInt index = 0;
+        for (auto field : structType->getFields())
+        {
+            if (index >= make->getOperandCount())
+                break;
+            auto arg = make->getOperand(index);
+            if (as<IRArrayType>(arg->getDataType()) && _isHalfBasedType(arg->getDataType()) &&
+                isRelaxedHalfStorageField(structType, field))
+            {
+                builder.setInsertBefore(make);
+                if (auto stored = toStorage(arg, toStorage))
+                    make->setOperand(index, stored);
+            }
+            index++;
+        }
     }
 }
 
@@ -5861,7 +6000,10 @@ void CLikeSourceEmitter::emitModuleImpl(IRModule* module, DiagnosticSink* sink)
     List<EmitAction> actions;
 
     if (usesRelaxedHalfFloatStorage())
+    {
         splitRelaxedHalfArrayReads(module);
+        splitRelaxedHalfArrayWrites(module);
+    }
     beforeComputeEmitActions(module);
     computeEmitActions(module, actions);
     executeEmitActions(actions);
